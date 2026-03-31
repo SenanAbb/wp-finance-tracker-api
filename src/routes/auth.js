@@ -29,7 +29,7 @@ async function registerAuthRoutes(app, services, jwtAuthMiddleware) {
       });
     }
 
-    const result = await authService.requestLogin(phone, ip, userAgent);
+    const result = await authService.requestLogin(phone, ip, userAgent, request.log);
 
     if (!result.ok) {
       return reply.status(400).send(result);

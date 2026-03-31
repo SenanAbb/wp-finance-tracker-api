@@ -27,9 +27,10 @@ class AuthService {
    * @param {string} phoneNumber
    * @param {string} ip
    * @param {string} userAgent
+   * @param {Object} log
    * @returns {Promise<Object>} - { ok: boolean, error?: string, expiresIn?: number }
    */
-  async requestLogin(phoneNumber, ip, userAgent) {
+  async requestLogin(phoneNumber, ip, userAgent, log = null) {
     try {
       // PASO 1: Validar formato y país del teléfono
       const validation = validatePhoneNumber(phoneNumber);
@@ -98,8 +99,26 @@ class AuthService {
         );
 
         if (!sendResult.ok) {
+          log?.error?.(
+            {
+              phoneNumber,
+              error: sendResult.error,
+              phoneNumberId: sendResult.meta?.phoneNumberId,
+              providerError: sendResult.meta?.providerError,
+            },
+            'Failed to send OTP via WhatsApp',
+          );
           return { ok: false, error: 'Failed to send OTP via WhatsApp' };
         }
+
+        log?.info?.(
+          {
+            phoneNumber,
+            messageId: sendResult.messageId,
+            phoneNumberId: sendResult.meta?.phoneNumberId,
+          },
+          'OTP sent via WhatsApp',
+        );
       } else if (!isDev) {
         return { ok: false, error: 'OTP delivery service is not configured' };
       }
