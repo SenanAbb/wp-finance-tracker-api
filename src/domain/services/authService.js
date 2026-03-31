@@ -15,10 +15,11 @@ const RATE_LIMIT_WINDOW = parseInt(process.env.RATE_LIMIT_WINDOW || '900', 10);
 const RATE_LIMIT_MAX_REQUESTS = parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '5', 10);
 
 class AuthService {
-  constructor(authRepository, userRepository, sessionService) {
+  constructor(authRepository, userRepository, sessionService, kapsoAdapter = null) {
     this.authRepository = authRepository;
     this.userRepository = userRepository;
     this.sessionService = sessionService;
+    this.kapsoAdapter = kapsoAdapter;
   }
 
   /**
@@ -88,9 +89,20 @@ class AuthService {
         success: true,
       });
 
-      // NOTA: En producción, aquí se enviaría el OTP por WhatsApp/Twilio
-      // Por ahora, retornamos el OTP en desarrollo
       const isDev = process.env.NODE_ENV !== 'production';
+
+      if (this.kapsoAdapter) {
+        const sendResult = await this.kapsoAdapter.sendText(
+          phoneNumber,
+          `Tu código de acceso para Finance Tracker es: ${otp}. Caduca en ${Math.floor(OTP_EXPIRATION / 60)} minutos.`,
+        );
+
+        if (!sendResult.ok) {
+          return { ok: false, error: 'Failed to send OTP via WhatsApp' };
+        }
+      } else if (!isDev) {
+        return { ok: false, error: 'OTP delivery service is not configured' };
+      }
 
       return {
         ok: true,

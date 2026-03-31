@@ -141,6 +141,14 @@ async function main() {
   // Registrar middleware JWT para rutas protegidas
   // Se registrará después de inicializar los servicios
   let jwtAuthMiddleware;
+  let kapsoAdapter = null;
+
+  if (process.env.KAPSO_API_KEY && process.env.KAPSO_PHONE_NUMBER_ID) {
+    kapsoAdapter = new KapsoWhatsAppAdapter({
+      kapsoApiKey: process.env.KAPSO_API_KEY,
+      phoneNumberId: process.env.KAPSO_PHONE_NUMBER_ID,
+    });
+  }
 
   // Inicializar repositories y services (agnóstico de la BD)
   let repositories;
@@ -167,6 +175,7 @@ async function main() {
         repositories.authRepository,
         repositories.userRepository,
         sessionService,
+        kapsoAdapter,
       ),
     };
 
@@ -198,12 +207,7 @@ async function main() {
   await app.register(twilioRoutes, { repositories, services });
 
   // Registrar rutas de Kapso (webhook principal para Meta Cloud API)
-  let kapsoAdapter = null;
-  if (process.env.KAPSO_API_KEY && process.env.KAPSO_PHONE_NUMBER_ID) {
-    kapsoAdapter = new KapsoWhatsAppAdapter({
-      kapsoApiKey: process.env.KAPSO_API_KEY,
-      phoneNumberId: process.env.KAPSO_PHONE_NUMBER_ID,
-    });
+  if (kapsoAdapter) {
     await app.register(kapsoRoutes, { repositories, services, kapsoAdapter });
     app.log.info("Kapso WhatsApp adapter initialized");
   } else {
