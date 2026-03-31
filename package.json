@@ -1,0 +1,24 @@
+{
+  "name": "api",
+  "version": "1.0.0",
+  "description": "API Webhook connected to Whatsapp API Business",
+  "license": "ISC",
+  "author": "Sanan Abbasov",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "dev": "node --watch index.js",
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@fastify/formbody": "^8.0.0",
+    "@kapso/whatsapp-cloud-api": "^0.2.1",
+    "@supabase/supabase-js": "^2.0.0",
+    "dotenv": "^16.0.0",
+    "fastify": "^5.0.0",
+    "jsonwebtoken": "^9.0.3",
+    "libphonenumber-js": "^1.12.40",
+    "pino-pretty": "^11.0.0"
+  }
+}

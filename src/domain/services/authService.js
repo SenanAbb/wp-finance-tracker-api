@@ -1,0 +1,301 @@
+// ============================================================================
+// Auth Service (Domain Service)
+// ============================================================================
+// Lógica de negocio relacionada con autenticación
+// Usa repositories para acceso a datos (agnóstico de BD)
+// ============================================================================
+
+const { generateOTP, hashOTP, verifyOTP } = require('../../utils/otp.js');
+const { generateAccessToken, generateRefreshToken, hashToken, getRefreshTokenExpiresAt } = require('../../utils/jwt.js');
+const { validatePhoneNumber } = require('../../utils/phoneValidator.js');
+
+const OTP_EXPIRATION = parseInt(process.env.OTP_EXPIRATION || '600', 10);
+const OTP_MAX_ATTEMPTS = parseInt(process.env.OTP_MAX_ATTEMPTS || '3', 10);
+const RATE_LIMIT_WINDOW = parseInt(process.env.RATE_LIMIT_WINDOW || '900', 10);
+const RATE_LIMIT_MAX_REQUESTS = parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '5', 10);
+
+class AuthService {
+  constructor(authRepository, userRepository, sessionService) {
+    this.authRepository = authRepository;
+    this.userRepository = userRepository;
+    this.sessionService = sessionService;
+  }
+
+  /**
+   * Solicita un login por teléfono
+   * @param {string} phoneNumber
+   * @param {string} ip
+   * @param {string} userAgent
+   * @returns {Promise<Object>} - { ok: boolean, error?: string, expiresIn?: number }
+   */
+  async requestLogin(phoneNumber, ip, userAgent) {
+    try {
+      // PASO 1: Validar formato y país del teléfono
+      const validation = validatePhoneNumber(phoneNumber);
+      if (!validation.valid) {
+        return { ok: false, error: validation.error };
+      }
+
+      // PASO 2: Verificar rate limit por IP
+      const rateLimited = await this.authRepository.checkRateLimit(
+        ip,
+        'request_login',
+        RATE_LIMIT_WINDOW,
+        RATE_LIMIT_MAX_REQUESTS
+      );
+
+      if (rateLimited) {
+        await this.authRepository.createRateLimit({
+          ipAddress: ip,
+          phoneNumber,
+          requestType: 'request_login',
+          success: false,
+        });
+        return { ok: false, error: 'Too many login attempts. Try again later.' };
+      }
+
+      // PASO 3: Buscar usuario en BD
+      const user = await this.userRepository.getUserByPhone(phoneNumber);
+      if (!user) {
+        await this.authRepository.createRateLimit({
+          ipAddress: ip,
+          phoneNumber,
+          requestType: 'request_login',
+          success: false,
+        });
+        return { ok: false, error: 'User not found' };
+      }
+
+      // PASO 4: Generar OTP
+      const otp = generateOTP();
+      const codeHash = hashOTP(otp);
+      const expiresAt = new Date(Date.now() + OTP_EXPIRATION * 1000);
+
+      // PASO 5: Crear challenge en BD
+      const challenge = await this.authRepository.createAuthChallenge({
+        phoneNumber,
+        codeHash,
+        expiresAt,
+        ip,
+        userAgent,
+      });
+
+      // PASO 6: Registrar intento exitoso
+      await this.authRepository.createRateLimit({
+        ipAddress: ip,
+        phoneNumber,
+        requestType: 'request_login',
+        success: true,
+      });
+
+      // NOTA: En producción, aquí se enviaría el OTP por WhatsApp/Twilio
+      // Por ahora, retornamos el OTP en desarrollo
+      const isDev = process.env.NODE_ENV !== 'production';
+
+      return {
+        ok: true,
+        expiresIn: OTP_EXPIRATION,
+        ...(isDev && { otp }), // Solo en desarrollo
+      };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
+  /**
+   * Verifica un OTP e inicia sesión
+   * @param {string} phoneNumber
+   * @param {string} otp
+   * @param {string} ip
+   * @returns {Promise<Object>} - { ok: boolean, error?: string, accessToken?: string, refreshToken?: string, expiresIn?: number }
+   */
+  async verifyOTP(phoneNumber, otp, ip) {
+    try {
+      // PASO 1: Validar formato del teléfono
+      const validation = validatePhoneNumber(phoneNumber);
+      if (!validation.valid) {
+        return { ok: false, error: validation.error };
+      }
+
+      // PASO 2: Obtener challenge activo
+      const challenge = await this.authRepository.getActiveAuthChallenge(phoneNumber);
+      if (!challenge) {
+        await this.authRepository.createRateLimit({
+          ipAddress: ip,
+          phoneNumber,
+          requestType: 'verify_otp',
+          success: false,
+        });
+        return { ok: false, error: 'No active OTP challenge found' };
+      }
+
+      // PASO 3: Verificar que no se excedieron intentos fallidos
+      if (challenge.failed_attempts >= OTP_MAX_ATTEMPTS) {
+        await this.authRepository.createRateLimit({
+          ipAddress: ip,
+          phoneNumber,
+          requestType: 'verify_otp',
+          success: false,
+        });
+        return { ok: false, error: 'Too many failed attempts. Request a new OTP.' };
+      }
+
+      // PASO 4: Verificar OTP
+      let otpValid = false;
+      try {
+        otpValid = verifyOTP(otp, challenge.code_hash);
+      } catch (err) {
+        // Error en comparación de timing-safe
+        otpValid = false;
+      }
+
+      if (!otpValid) {
+        // Incrementar intentos fallidos
+        await this.authRepository.incrementFailedAttempts(challenge.id);
+        await this.authRepository.createRateLimit({
+          ipAddress: ip,
+          phoneNumber,
+          requestType: 'verify_otp',
+          success: false,
+        });
+        return { ok: false, error: 'Invalid OTP' };
+      }
+
+      // PASO 5: Marcar challenge como consumido
+      await this.authRepository.consumeAuthChallenge(challenge.id);
+
+      // PASO 6: Obtener usuario
+      const user = await this.userRepository.getUserByPhone(phoneNumber);
+      if (!user) {
+        return { ok: false, error: 'User not found' };
+      }
+
+      // PASO 7: Crear sesión
+      const session = await this.sessionService.createSession(user.id, {
+        ttlMs: 24 * 60 * 60 * 1000, // 24 horas
+      });
+
+      // PASO 8: Generar tokens
+      const accessToken = generateAccessToken(user.id, session.id);
+      const refreshToken = generateRefreshToken();
+      const refreshTokenHash = hashToken(refreshToken);
+      const refreshTokenExpiresAt = getRefreshTokenExpiresAt();
+
+      // PASO 9: Guardar refresh token en BD
+      await this.authRepository.createRefreshToken({
+        sessionId: session.id,
+        tokenHash: refreshTokenHash,
+        expiresAt: refreshTokenExpiresAt,
+      });
+
+      // PASO 10: Registrar intento exitoso
+      await this.authRepository.createRateLimit({
+        ipAddress: ip,
+        phoneNumber,
+        requestType: 'verify_otp',
+        success: true,
+      });
+
+      return {
+        ok: true,
+        accessToken,
+        refreshToken,
+        expiresIn: 3600, // Access token expira en 1 hora
+      };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
+  /**
+   * Refresca un Access Token usando un Refresh Token
+   * @param {string} refreshToken
+   * @returns {Promise<Object>} - { ok: boolean, error?: string, accessToken?: string, expiresIn?: number }
+   */
+  async refreshToken(refreshToken) {
+    try {
+      // PASO 1: Hashear refresh token
+      const refreshTokenHash = hashToken(refreshToken);
+
+      // PASO 2: Obtener refresh token de BD
+      const session = await this.authRepository.getRefreshToken(refreshTokenHash);
+      if (!session) {
+        return { ok: false, error: 'Invalid or expired refresh token' };
+      }
+
+      // PASO 3: Verificar que la sesión no está revocada
+      if (session.revoked_at) {
+        return { ok: false, error: 'Session has been revoked' };
+      }
+
+      // PASO 4: Generar nuevo Access Token
+      const accessToken = generateAccessToken(session.user_id, session.id);
+
+      return {
+        ok: true,
+        accessToken,
+        expiresIn: 3600, // Access token expira en 1 hora
+      };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
+  /**
+   * Logout: revoca la sesión y el refresh token
+   * @param {string} sessionId
+   * @returns {Promise<Object>} - { ok: boolean, error?: string }
+   */
+  async logout(sessionId) {
+    try {
+      // PASO 1: Revocar sesión
+      await this.sessionService.revokeSession(sessionId);
+
+      // PASO 2: Revocar refresh token (si existe)
+      // Nota: El refresh token se revoca automáticamente al revocar la sesión
+      // porque refresh_token_hash se limpia
+
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
+  /**
+   * Valida un JWT y retorna la información del usuario
+   * @param {Object} tokenPayload - payload del JWT decodificado
+   * @returns {Promise<Object>} - { ok: boolean, error?: string, userId?: string, sessionId?: string }
+   */
+  async validateToken(tokenPayload) {
+    try {
+      const { sub: userId, session_id: sessionId } = tokenPayload;
+
+      if (!userId || !sessionId) {
+        return { ok: false, error: 'Invalid token payload' };
+      }
+
+      // PASO 1: Verificar que la sesión existe y no está revocada
+      const session = await this.sessionService.getSessionById(sessionId);
+      if (!session || session.revoked_at) {
+        return { ok: false, error: 'Session not found or revoked' };
+      }
+
+      // PASO 2: Verificar que el usuario existe
+      const user = await this.userRepository.getUserById(userId);
+      if (!user) {
+        return { ok: false, error: 'User not found' };
+      }
+
+      return {
+        ok: true,
+        userId,
+        sessionId,
+        phone: user.phone_number,
+      };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+}
+
+module.exports = AuthService;
