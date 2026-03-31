@@ -13,6 +13,7 @@ const OTP_EXPIRATION = parseInt(process.env.OTP_EXPIRATION || '600', 10);
 const OTP_MAX_ATTEMPTS = parseInt(process.env.OTP_MAX_ATTEMPTS || '3', 10);
 const RATE_LIMIT_WINDOW = parseInt(process.env.RATE_LIMIT_WINDOW || '900', 10);
 const RATE_LIMIT_MAX_REQUESTS = parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '5', 10);
+const OTP_DEBUG_DETAILS = String(process.env.OTP_DEBUG_DETAILS || '').toLowerCase() === 'true';
 
 class AuthService {
   constructor(authRepository, userRepository, sessionService, kapsoAdapter = null) {
@@ -108,7 +109,17 @@ class AuthService {
             },
             'Failed to send OTP via WhatsApp',
           );
-          return { ok: false, error: 'Failed to send OTP via WhatsApp' };
+          return {
+            ok: false,
+            error: 'Failed to send OTP via WhatsApp',
+            ...(OTP_DEBUG_DETAILS && {
+              details: {
+                providerError: sendResult.meta?.providerError || null,
+                providerMessage: sendResult.error || null,
+                phoneNumberId: sendResult.meta?.phoneNumberId || null,
+              },
+            }),
+          };
         }
 
         log?.info?.(
