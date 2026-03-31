@@ -15,6 +15,14 @@ const RATE_LIMIT_WINDOW = parseInt(process.env.RATE_LIMIT_WINDOW || '900', 10);
 const RATE_LIMIT_MAX_REQUESTS = parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '5', 10);
 const OTP_DEBUG_DETAILS = String(process.env.OTP_DEBUG_DETAILS || '').toLowerCase() === 'true';
 
+function isWhatsAppConversationWindowError(sendResult) {
+  const providerMessage = String(
+    sendResult?.meta?.providerError?.message || sendResult?.error || '',
+  ).toLowerCase();
+
+  return providerMessage.includes('cannot send non-template messages outside the 24-hour window');
+}
+
 class AuthService {
   constructor(authRepository, userRepository, sessionService, kapsoAdapter = null) {
     this.authRepository = authRepository;
@@ -100,6 +108,10 @@ class AuthService {
         );
 
         if (!sendResult.ok) {
+          const userFriendlyError = isWhatsAppConversationWindowError(sendResult)
+            ? 'Para iniciar sesión, primero tienes que abrir conversación por WhatsApp con Finance Tracker y enviarnos un mensaje.'
+            : 'Failed to send OTP via WhatsApp';
+
           log?.error?.(
             {
               phoneNumber,
@@ -111,7 +123,7 @@ class AuthService {
           );
           return {
             ok: false,
-            error: 'Failed to send OTP via WhatsApp',
+            error: userFriendlyError,
             ...(OTP_DEBUG_DETAILS && {
               details: {
                 providerError: sendResult.meta?.providerError || null,
