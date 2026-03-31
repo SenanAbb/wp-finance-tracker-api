@@ -31,6 +31,17 @@ const {
 
 const HOST = process.env.API_HOST || "0.0.0.0";
 const PORT = Number(process.env.API_PORT || 3001);
+const allowedOrigins = [
+  "http://localhost:3000",
+  "http://localhost:3001",
+  "http://127.0.0.1:3000",
+  "http://127.0.0.1:3001",
+  process.env.WEB_APP_URL,
+  ...(process.env.CORS_ALLOWED_ORIGINS || "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean),
+].filter(Boolean);
 
 async function main() {
   // Crear instancia de Fastify con logger configurado
@@ -42,12 +53,6 @@ async function main() {
   // Hook: CORS + Logging
   app.addHook("onRequest", async (request, reply) => {
     const origin = request.headers.origin;
-    const allowedOrigins = [
-      "http://localhost:3000",
-      "http://localhost:3001",
-      "http://127.0.0.1:3000",
-      "http://127.0.0.1:3001",
-    ];
 
     // Agregar headers CORS
     if (allowedOrigins.includes(origin)) {
