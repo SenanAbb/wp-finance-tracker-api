@@ -11,6 +11,7 @@
 // FLUJO: Igual que Twilio, usa la máquina de estados para procesar mensajes.
 // ============================================================================
 
+const crypto = require('crypto');
 const { isE164 } = require("../utils/phone.js");
 const { AppError } = require("../utils/errors.js");
 const StateMachine = require("../state/stateMachine.js");
@@ -18,6 +19,25 @@ const handlers = require("../state/handlers/index.js");
 
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 const IS_DEV = String(process.env.NODE_ENV || "development").toLowerCase() !== "production";
+
+function verifyKapsoWebhookSignature(payload, signatureHeader, secret) {
+  if (!secret) return true;
+  if (!signatureHeader) return false;
+
+  const expectedSignature = crypto
+    .createHmac('sha256', String(secret))
+    .update(JSON.stringify(payload))
+    .digest('hex');
+
+  const provided = String(signatureHeader);
+  if (provided.length !== expectedSignature.length) return false;
+
+  try {
+    return crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expectedSignature));
+  } catch {
+    return false;
+  }
+}
 
 async function kapsoRoutes(app, opts) {
   const { repositories, services, kapsoAdapter } = opts;
@@ -55,14 +75,15 @@ async function kapsoRoutes(app, opts) {
     const log = request.log;
     const payload = request.body;
 
-    // Verificación adicional: secreto compartido (si está configurado)
-    // Kapso/Meta no nos envía JWT; este check protege contra POSTs arbitrarios.
-    const expectedSecret = process.env.KAPSO_WEBHOOK_SECRET;
-    if (expectedSecret) {
-      const providedSecret = request.headers['x-kapso-webhook-secret'];
-      if (!providedSecret || String(providedSecret) !== String(expectedSecret)) {
-        log.warn({ hasSecret: Boolean(providedSecret) }, 'Kapso webhook: invalid secret');
-        return reply.code(403).send('Forbidden');
+    // Verificar autenticidad del webhook (Kapso firma el payload con HMAC-SHA256)
+    // Header: X-Webhook-Signature
+    const webhookSecret = process.env.KAPSO_WEBHOOK_SECRET;
+    if (webhookSecret) {
+      const signatureHeader = request.headers['x-webhook-signature'];
+      const ok = verifyKapsoWebhookSignature(payload, signatureHeader, webhookSecret);
+      if (!ok) {
+        log.warn({ hasSignature: Boolean(signatureHeader) }, 'Kapso webhook: invalid signature');
+        return reply.code(401).send('Invalid signature');
       }
     }
 
