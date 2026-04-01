@@ -55,6 +55,17 @@ async function kapsoRoutes(app, opts) {
     const log = request.log;
     const payload = request.body;
 
+    // Verificación adicional: secreto compartido (si está configurado)
+    // Kapso/Meta no nos envía JWT; este check protege contra POSTs arbitrarios.
+    const expectedSecret = process.env.KAPSO_WEBHOOK_SECRET;
+    if (expectedSecret) {
+      const providedSecret = request.headers['x-kapso-webhook-secret'];
+      if (!providedSecret || String(providedSecret) !== String(expectedSecret)) {
+        log.warn({ hasSecret: Boolean(providedSecret) }, 'Kapso webhook: invalid secret');
+        return reply.code(403).send('Forbidden');
+      }
+    }
+
     // Validar que repositories y services están inicializados
     if (!repositories || !services || !kapsoAdapter) {
       log.error("Kapso webhook: Backend not configured");

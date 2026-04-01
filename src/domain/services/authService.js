@@ -48,14 +48,23 @@ class AuthService {
       }
 
       // PASO 2: Verificar rate limit por IP
-      const rateLimited = await this.authRepository.checkRateLimit(
+      const rateLimitedByIp = await this.authRepository.checkRateLimit(
         ip,
         'request_login',
         RATE_LIMIT_WINDOW,
-        RATE_LIMIT_MAX_REQUESTS
+        RATE_LIMIT_MAX_REQUESTS,
       );
 
-      if (rateLimited) {
+      // PASO 2b: Verificar rate limit por teléfono (más estricto)
+      const rateLimitedByPhone = await this.authRepository.checkRateLimit(
+        ip,
+        'request_login',
+        RATE_LIMIT_WINDOW,
+        RATE_LIMIT_MAX_REQUESTS,
+        phoneNumber,
+      );
+
+      if (rateLimitedByIp || rateLimitedByPhone) {
         await this.authRepository.createRateLimit({
           ipAddress: ip,
           phoneNumber,
@@ -74,7 +83,8 @@ class AuthService {
           requestType: 'request_login',
           success: false,
         });
-        return { ok: false, error: 'User not found' };
+        // Respuesta genérica para evitar enumeración de usuarios
+        return { ok: true, expiresIn: OTP_EXPIRATION };
       }
 
       // PASO 4: Generar OTP
@@ -169,6 +179,32 @@ class AuthService {
       const validation = validatePhoneNumber(phoneNumber);
       if (!validation.valid) {
         return { ok: false, error: validation.error };
+      }
+
+      // PASO 1b: Rate limit de verificación OTP (IP + teléfono)
+      const verifyLimitedByIp = await this.authRepository.checkRateLimit(
+        ip,
+        'verify_otp',
+        RATE_LIMIT_WINDOW,
+        RATE_LIMIT_MAX_REQUESTS,
+      );
+
+      const verifyLimitedByPhone = await this.authRepository.checkRateLimit(
+        ip,
+        'verify_otp',
+        RATE_LIMIT_WINDOW,
+        RATE_LIMIT_MAX_REQUESTS,
+        phoneNumber,
+      );
+
+      if (verifyLimitedByIp || verifyLimitedByPhone) {
+        await this.authRepository.createRateLimit({
+          ipAddress: ip,
+          phoneNumber,
+          requestType: 'verify_otp',
+          success: false,
+        });
+        return { ok: false, error: 'Too many OTP verification attempts. Try again later.' };
       }
 
       // PASO 2: Obtener challenge activo

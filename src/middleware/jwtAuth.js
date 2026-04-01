@@ -7,6 +7,21 @@
 
 const { verifyToken } = require('../utils/jwt.js');
 
+function parseCookies(cookieHeader) {
+  const result = {};
+  if (!cookieHeader) return result;
+  const parts = String(cookieHeader).split(';');
+  for (const part of parts) {
+    const [rawKey, ...rest] = part.trim().split('=');
+    if (!rawKey) continue;
+    const key = rawKey.trim();
+    const value = rest.join('=');
+    if (!key) continue;
+    result[key] = decodeURIComponent(value || '');
+  }
+  return result;
+}
+
 /**
  * Middleware para validar JWT Bearer tokens
  * Extrae el token del header Authorization y lo valida
@@ -16,17 +31,23 @@ const { verifyToken } = require('../utils/jwt.js');
 function createJwtAuthMiddleware(authService) {
   return async (request, reply) => {
     try {
-      // PASO 1: Extraer header Authorization
-      const authHeader = request.headers.authorization;
-      if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        return reply.status(401).send({
-          ok: false,
-          error: 'Missing or invalid Authorization header',
-        });
+      const cookies = parseCookies(request.headers.cookie);
+
+      // PASO 1: Extraer token desde cookie (preferido) o header Authorization (fallback)
+      let token = cookies.accessToken;
+      if (!token) {
+        const authHeader = request.headers.authorization;
+        if (authHeader && authHeader.startsWith('Bearer ')) {
+          token = authHeader.slice(7); // Remover "Bearer "
+        }
       }
 
-      // PASO 2: Extraer token
-      const token = authHeader.slice(7); // Remover "Bearer "
+      if (!token) {
+        return reply.status(401).send({
+          ok: false,
+          error: 'Missing access token',
+        });
+      }
 
       // PASO 3: Verificar firma del JWT
       let payload;

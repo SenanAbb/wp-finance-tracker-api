@@ -11,6 +11,11 @@ const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-key-change-in-productio
 const JWT_EXPIRATION = parseInt(process.env.JWT_EXPIRATION || '3600', 10);
 const REFRESH_TOKEN_EXPIRATION = parseInt(process.env.REFRESH_TOKEN_EXPIRATION || '604800', 10);
 
+const IS_PROD = String(process.env.NODE_ENV || 'development').toLowerCase() === 'production';
+if (IS_PROD && (!process.env.JWT_SECRET || process.env.JWT_SECRET.trim().length < 16)) {
+  throw new Error('JWT_SECRET is required in production and must be at least 16 characters long');
+}
+
 /**
  * Genera un Access Token JWT
  * @param {string} userId

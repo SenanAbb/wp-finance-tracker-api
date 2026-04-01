@@ -8,13 +8,10 @@
 require("dotenv").config();
 
 const Fastify = require("fastify");
-const formbody = require("@fastify/formbody");
 const { getLoggerOptions } = require("./src/logger.js");
 const { isAppError } = require("./src/utils/errors.js");
-const twilioRoutes = require("./src/routes/twilio.js");
 const kapsoRoutes = require("./src/routes/kapso.js");
 const { registerAuthRoutes } = require("./src/routes/auth.js");
-const { twimlMessage } = require("./src/utils/twiml.js");
 const KapsoWhatsAppAdapter = require("./src/adapters/implementations/kapso/kapsoWhatsAppClient.js");
 const { createSupabaseRepositories } = require("./src/adapters/implementations/supabase/index.js");
 const { createJwtAuthMiddleware } = require("./src/middleware/jwtAuth.js");
@@ -93,7 +90,6 @@ async function main() {
   });
 
   // Manejador global de errores
-  // Si hay error en una ruta de Twilio, responde con TwiML (XML para WhatsApp)
   // Si hay error en Kapso, responde con 200 (ya respondió)
   // Si hay error en otra ruta, responde con JSON
   app.setErrorHandler(async (err, request, reply) => {
@@ -106,12 +102,6 @@ async function main() {
         };
 
     request.log.error({ err }, "Unhandled error");
-
-    const isTwilioRoute = request.url && request.url.startsWith("/twilio/");
-    if (isTwilioRoute) {
-      reply.code(200).type("text/xml").send(twimlMessage(appErr.publicMessage));
-      return;
-    }
 
     const isKapsoRoute = request.url && request.url.startsWith("/kapso/");
     if (isKapsoRoute) {
@@ -134,9 +124,6 @@ async function main() {
         },
       });
   });
-
-  // Registrar plugin para parsear form-data (necesario para Twilio)
-  await app.register(formbody);
 
   // Registrar middleware JWT para rutas protegidas
   // Se registrará después de inicializar los servicios
@@ -203,9 +190,6 @@ async function main() {
     await registerAuthRoutes(app, services, jwtAuthMiddleware);
   }
 
-  // Registrar rutas de Twilio (webhook legacy para recibir mensajes de WhatsApp)
-  await app.register(twilioRoutes, { repositories, services });
-
   // Registrar rutas de Kapso (webhook principal para Meta Cloud API)
   if (kapsoAdapter) {
     await app.register(kapsoRoutes, { repositories, services, kapsoAdapter });
@@ -222,7 +206,6 @@ async function main() {
     {
       baseUrl,
       health: `${baseUrl}/health`,
-      twilioWebhook: `${baseUrl}/twilio/webhook`,
       kapsoWebhook: `${baseUrl}/kapso/webhook`,
     },
     "API ready",

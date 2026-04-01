@@ -13,6 +13,52 @@
 async function registerAuthRoutes(app, services, jwtAuthMiddleware) {
   const { authService } = services;
 
+  function parseCookies(cookieHeader) {
+    const result = {};
+    if (!cookieHeader) return result;
+    const parts = String(cookieHeader).split(';');
+    for (const part of parts) {
+      const [rawKey, ...rest] = part.trim().split('=');
+      if (!rawKey) continue;
+      const key = rawKey.trim();
+      const value = rest.join('=');
+      if (!key) continue;
+      result[key] = decodeURIComponent(value || '');
+    }
+    return result;
+  }
+
+  function appendSetCookie(reply, cookieValue) {
+    const current = reply.getHeader('set-cookie');
+    if (!current) {
+      reply.header('Set-Cookie', cookieValue);
+      return;
+    }
+
+    if (Array.isArray(current)) {
+      reply.header('Set-Cookie', [...current, cookieValue]);
+      return;
+    }
+
+    reply.header('Set-Cookie', [String(current), cookieValue]);
+  }
+
+  function setAuthCookies(reply, { accessToken, refreshToken, accessMaxAgeSeconds, refreshMaxAgeSeconds }) {
+    const isProd = String(process.env.NODE_ENV || 'development').toLowerCase() === 'production';
+
+    const base = `Path=/; HttpOnly; SameSite=Strict${isProd ? '; Secure' : ''}`;
+    appendSetCookie(reply, `accessToken=${encodeURIComponent(accessToken)}; ${base}; Max-Age=${accessMaxAgeSeconds}`);
+    appendSetCookie(reply, `refreshToken=${encodeURIComponent(refreshToken)}; ${base}; Max-Age=${refreshMaxAgeSeconds}`);
+  }
+
+  function clearAuthCookies(reply) {
+    const isProd = String(process.env.NODE_ENV || 'development').toLowerCase() === 'production';
+
+    const base = `Path=/; HttpOnly; SameSite=Strict${isProd ? '; Secure' : ''}`;
+    appendSetCookie(reply, `accessToken=; ${base}; Max-Age=0`);
+    appendSetCookie(reply, `refreshToken=; ${base}; Max-Age=0`);
+  }
+
   /**
    * POST /auth/request-login
    * Solicita un OTP para login por teléfono
@@ -35,7 +81,7 @@ async function registerAuthRoutes(app, services, jwtAuthMiddleware) {
       return reply.status(400).send(result);
     }
 
-    return reply.status(200).send(result);
+    return reply.status(200).send({ ok: true, expiresIn: result.expiresIn || 3600 });
   });
 
   /**
@@ -59,7 +105,16 @@ async function registerAuthRoutes(app, services, jwtAuthMiddleware) {
       return reply.status(400).send(result);
     }
 
-    return reply.status(200).send(result);
+    if (result.accessToken && result.refreshToken) {
+      setAuthCookies(reply, {
+        accessToken: result.accessToken,
+        refreshToken: result.refreshToken,
+        accessMaxAgeSeconds: result.expiresIn || 3600,
+        refreshMaxAgeSeconds: parseInt(process.env.REFRESH_TOKEN_EXPIRATION || '604800', 10),
+      });
+    }
+
+    return reply.status(200).send({ ok: true, expiresIn: result.expiresIn || 3600 });
   });
 
   /**
@@ -67,7 +122,8 @@ async function registerAuthRoutes(app, services, jwtAuthMiddleware) {
    * Refresca un Access Token usando un Refresh Token
    */
   app.post('/auth/refresh-token', async (request, reply) => {
-    const { refreshToken } = request.body;
+    const cookies = parseCookies(request.headers.cookie);
+    const refreshToken = request.body?.refreshToken || cookies.refreshToken;
 
     if (!refreshToken) {
       return reply.status(400).send({
@@ -82,7 +138,13 @@ async function registerAuthRoutes(app, services, jwtAuthMiddleware) {
       return reply.status(401).send(result);
     }
 
-    return reply.status(200).send(result);
+    if (result.accessToken) {
+      const isProd = String(process.env.NODE_ENV || 'development').toLowerCase() === 'production';
+      const base = `Path=/; HttpOnly; SameSite=Strict${isProd ? '; Secure' : ''}`;
+      appendSetCookie(reply, `accessToken=${encodeURIComponent(result.accessToken)}; ${base}; Max-Age=${result.expiresIn || 3600}`);
+    }
+
+    return reply.status(200).send({ ok: true, expiresIn: result.expiresIn || 3600 });
   });
 
   /**
@@ -103,6 +165,7 @@ async function registerAuthRoutes(app, services, jwtAuthMiddleware) {
       return reply.status(400).send(result);
     }
 
+    clearAuthCookies(reply);
     return reply.status(200).send(result);
   });
 

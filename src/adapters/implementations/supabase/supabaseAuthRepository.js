@@ -106,15 +106,21 @@ class SupabaseAuthRepository extends AuthRepository {
     return rateLimit;
   }
 
-  async checkRateLimit(ipAddress, requestType, windowSeconds, maxRequests) {
+  async checkRateLimit(ipAddress, requestType, windowSeconds, maxRequests, phoneNumber = null) {
     const windowStart = new Date(Date.now() - windowSeconds * 1000).toISOString();
 
-    const { data: attempts, error } = await this.supabase
+    let query = this.supabase
       .from('auth_rate_limits')
       .select('id', { count: 'exact' })
       .eq('ip_address', ipAddress)
       .eq('request_type', requestType)
       .gte('attempted_at', windowStart);
+
+    if (phoneNumber) {
+      query = query.eq('phone_number', phoneNumber);
+    }
+
+    const { data: attempts, error } = await query;
 
     if (error) throw new Error(`Failed to check rate limit: ${error.message}`);
 

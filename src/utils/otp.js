@@ -16,7 +16,7 @@ const OTP_LENGTH = parseInt(process.env.OTP_LENGTH || '6', 10);
 function generateOTP(length = OTP_LENGTH) {
   let otp = '';
   for (let i = 0; i < length; i++) {
-    otp += Math.floor(Math.random() * 10).toString();
+    otp += crypto.randomInt(0, 10).toString();
   }
   return otp;
 }
